@@ -7,21 +7,18 @@ from __future__ import annotations
 
 import warnings
 from functools import lru_cache
-from json import loads
+from pathlib import Path
 from typing import ClassVar, Self
 
 import numpy as np
 import pandas as pd
-from bs4 import BeautifulSoup
 from sklearn.model_selection import ParameterGrid
 
 from ... import FixturesData, ParamGrid, Schema, TrainData
 from .._base import BaseDataLoader
-from ._utils import OUTPUTS, _read_csv, _read_csvs, _read_urls_content
+from ._utils import OUTPUTS
 
-MODELLING_URL = 'https://github.com/georgedouzas/sports-betting/tree/data/data/soccer/modelling'
-TRAINING_URL = 'https://raw.githubusercontent.com/georgedouzas/sports-betting/data/data/soccer/modelling/{league}_{division}_{year}.csv'
-FIXTURES_URL = 'https://raw.githubusercontent.com/georgedouzas/sports-betting/data/data/soccer/modelling/fixtures.csv'
+DATA_DIR = Path(__file__).resolve().parents[4] / 'data' / 'soccer' / 'modelling'
 
 
 class SoccerDataLoader(BaseDataLoader):
@@ -166,12 +163,12 @@ class SoccerDataLoader(BaseDataLoader):
     @classmethod
     @lru_cache
     def _get_full_param_grid(cls: type[SoccerDataLoader]) -> ParameterGrid:
-        bsObj = BeautifulSoup(_read_urls_content([MODELLING_URL])[0], features='html.parser')
-        element = bsObj.find('script', {'data-target': 'react-app.embeddedData'})
         param_grid = []
-        for item in loads(element.text)['payload']['tree']['items']:
-            if 'fixtures.csv' not in item['path']:
-                league, division, year = item['name'].replace('.csv', '').split('_')
+        if DATA_DIR.exists():
+            for path in sorted(DATA_DIR.glob('*.csv')):
+                if path.stem == 'fixtures':
+                    continue
+                league, division, year = path.stem.split('_')
                 param_grid.append(
                     {
                         'league': [league.title() if league.lower() != 'usa' else 'USA'],
@@ -183,10 +180,15 @@ class SoccerDataLoader(BaseDataLoader):
 
     @lru_cache  # noqa: B019
     def _get_data(self: Self) -> pd.DataFrame:
-        urls = [TRAINING_URL.format(**params) for params in self.param_grid_]
-        training_data = pd.concat(_read_csvs(urls))
+        frames = []
+        for params in self.param_grid_:
+            league_name = str(params['league']).lower()
+            path = DATA_DIR / f"{league_name}_{params['division']}_{params['year']}.csv"
+            frames.append(pd.read_csv(path))
+        training_data = pd.concat(frames, ignore_index=True)
         training_data['fixtures'] = False
-        fixtures_data = _read_csv(FIXTURES_URL)
+        fixtures_path = DATA_DIR / 'fixtures.csv'
+        fixtures_data = pd.read_csv(fixtures_path) if fixtures_path.exists() else pd.DataFrame()
         fixtures_data['fixtures'] = True
         data = (pd.concat([training_data, fixtures_data]) if not fixtures_data.empty else training_data).reset_index(
             drop=True,
